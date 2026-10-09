@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func reflectedFieldValue(v any, name string) reflect.Value {
@@ -1754,6 +1755,35 @@ func TestReplaceSessionMessages(t *testing.T) {
 	got, _ := d.GetAllMessages(t.Context(), "s1")
 	require.Len(t, got, 2, "len")
 	assert.Equal(t, "new1", got[0].Content, "content")
+}
+
+// Provider metadata such as a codex exec origin marks a session automated even
+// when its prompt matches no text pattern. Rewriting its messages, as a full
+// reparse does, must not clear that classification.
+func TestReplaceSessionMessagesKeepsMetadataAutomation(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	first := "please fix the failing build"
+	insertSession(t, d, "exec", "p", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionKind = parser.SessionKindNonInteractive
+		s.FirstMessage = &first
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	stored, err := d.GetSessionFull(ctx, "exec")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.True(t, stored.IsAutomated)
+
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "exec", []Message{
+		userMsg("exec", 0, first),
+		asstMsg("exec", 1, "done"),
+	}))
+	stored, err = d.GetSessionFull(ctx, "exec")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.True(t, stored.IsAutomated, "a non-interactive session stays automated")
 }
 
 func TestInsertMessagesClassifiesAutomationFromUserTranscript(
